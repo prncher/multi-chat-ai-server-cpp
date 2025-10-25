@@ -69,7 +69,7 @@ class SocketConnection {
         std::string create_websocket_accept_key(const std::string& websocket_key);
         std::string encode(const std::string& input);
         std::string sendChatQuery(const std::string& query);
-        static size_t writeCallback(char* data, size_t size, size_t nmemb, void* clientp);
         std::string getContent(const std::string& query);
         std::string transformMarkdown(std::string& answer);
+        static size_t writeCallback(char* data, size_t size, size_t nmemb, void* clientp);
 };

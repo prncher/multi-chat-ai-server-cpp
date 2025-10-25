@@ -1,9 +1,19 @@
 ﻿#include "SocketConnection.h"
 
+/*
+Default constructor.
+*/
 SocketConnection::SocketConnection() {
     this->clientSocket = INVALID_SOCKET;
     this->upgradedConnection = false;
 }
+
+/*
+Constructor passing the client socket opened by the client.
+A url is created for the AI inference app server.
+The upgrade connection is initially false for the http
+and once upgraded, the connection starts operating using websocket protocol.
+*/
 SocketConnection::SocketConnection(SOCKET clientSocket)
 {
     this->clientSocket = clientSocket;
@@ -14,11 +24,22 @@ SocketConnection::SocketConnection(SOCKET clientSocket)
     url = "http://127.0.0.1:" + std::to_string(LLAMA_CPP_PORT) + "/v1/chat/completions";
 }
 
+/*
+Close the socket from the server or if any error while sending or receiving messages.
+*/
 void SocketConnection::closeSocket()
 {
     closesocket(this->clientSocket);
     this->clientSocket = INVALID_SOCKET;
 }
+
+/*
+    This is a thread routine infinitely waiting for receiving
+    messages on the client socket opened by the calling thread.
+    As long as the clientsocket is not closed, the do-while loop
+    continues. The client socket is closed either by the client itself
+    or by a Ctrl+C interrupt on the server main thread.
+*/
 void SocketConnection::startReceiveMessages(
     std::map<int, SOCKET> *socketConnections, 
     std::list<SocketConnection*> *listConnections)
@@ -90,6 +111,11 @@ void SocketConnection::startReceiveMessages(
     delete this;
 }
 
+/*
+Parse regular incoming messages to the websocket. This is different
+from the HTTP messages. So special handling for masking etc is required.
+Follow https://datatracker.ietf.org/doc/html/rfc6455#section-11.9 for details.
+*/
 std::string SocketConnection::parseMessage(const char* buffer, size_t buffer_size)
 {
     // This assumes a single, unfragmented text frame
@@ -123,7 +149,6 @@ std::string SocketConnection::parseMessage(const char* buffer, size_t buffer_siz
                 unmaskedPayload[i] = buffer[offset + i] ^ maskingKey[i % MASK_SIZE];
             }
             std::string receivedText(unmaskedPayload.begin(), unmaskedPayload.end());
-            std::cout << "Received text: " << receivedText << std::endl;
             return receivedText;
         }
 
@@ -137,6 +162,10 @@ std::string SocketConnection::parseMessage(const char* buffer, size_t buffer_siz
     return std::string();
 }
 
+/*
+Create message frame to be send to the client using the text message.
+The table below come from https://datatracker.ietf.org/doc/html/rfc6455#section-11.9
+*/
 FrameData SocketConnection::prepareMessage(const std::string& message)
 {
     /*
@@ -181,6 +210,11 @@ FrameData SocketConnection::prepareMessage(const std::string& message)
     };
 }
 
+/*
+Walk through the received message lines and make the request header.
+From the request header, get the websocket key to generate the handshake response.
+If it is not a connection upgrade message, do nothing.
+*/
 void SocketConnection::sendUpgrade(
     std::map<int, SOCKET> *socketConnections,
     const char* buffer, 
@@ -200,7 +234,7 @@ void SocketConnection::sendUpgrade(
     std::getline(stream, line);
     std::string::size_type client_id_pos = line.find("/ws/");
     if (client_id_pos != std::string::npos) {
-        // Maximum single digit clients.
+        // Maximum single digit client ids.
         int clientId = std::stoi(line.substr(client_id_pos + 4, 1));
         socketConnections->insert(
             std::pair<int, SOCKET>(clientId, this->clientSocket));
@@ -240,6 +274,10 @@ void SocketConnection::sendUpgrade(
     }
 }
 
+/*
+Create the initial handshake response using the websocket key from client.
+Send the handshake response to the client.
+*/
 void SocketConnection::sendUpgradeMessage(const std::string& websocket_key)
 {
     std::string sec_websocket_accept = create_websocket_accept_key(websocket_key);
@@ -253,9 +291,11 @@ void SocketConnection::sendUpgradeMessage(const std::string& websocket_key)
         printf("send failed with error: %d\n", WSAGetLastError());
         closesocket(this->clientSocket);
     }
-    printf("Bytes Sent: %ld\n", iResult);
 }
 
+/*
+Create the access key from the socket key passed from the client.
+*/
 std::string SocketConnection::create_websocket_accept_key(const std::string& websocket_key)
 {
     unsigned char hash[SHA_DIGEST_LENGTH];
@@ -265,6 +305,9 @@ std::string SocketConnection::create_websocket_accept_key(const std::string& web
     return this->encode(sec_accept_hashed);
 }
 
+/*
+Encode the handshake response message.
+*/
 std::string SocketConnection::encode(const std::string& input)
 {
     BIO* bio = BIO_new(BIO_f_base64());
@@ -290,14 +333,15 @@ std::string SocketConnection::encode(const std::string& input)
     return encoded;
 }
 
+/*
+Send the query to the inference server running usil curl.
+*/
 std::string SocketConnection::sendChatQuery(const std::string& query)
 {
     CURL *curl = curl_easy_init();
     if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    }
 
-    if (curl) {
         std::string json_data = "{ \
             \"messages\": [ \
         {\"role\": \"system\", \"content\" : \"You are a helpful assistant.\"}, \
@@ -333,6 +377,10 @@ std::string SocketConnection::sendChatQuery(const std::string& query)
     return std::string();
 }
 
+/*
+Get the data from the server and process it for only ASCII characters.
+TODO: At this point the underlying reason for non ASCII is not known.
+*/
 size_t SocketConnection::writeCallback(char* data, 
     size_t size, 
     size_t nmemb, 
@@ -345,9 +393,6 @@ size_t SocketConnection::writeCallback(char* data,
         if (o >= 32 && o <= 127) {
             asciiAnswer[j++] = data[i];
         }
-        else {
-            std::cout << "Non Ascii: " << data[i] << std::endl;
-        }
     }
     ((std::string*)clientp)->append(asciiAnswer,j);
     delete asciiAnswer;
@@ -355,6 +400,10 @@ size_t SocketConnection::writeCallback(char* data,
     return nmemb;
 }
 
+/* 
+The input is a JSON formatted string.
+Instead of parsing the JSON, the required content is searched using regex.
+*/
 std::string SocketConnection::getContent(const std::string& answer)
 {
     std::regex pattern(R"(content\":\"(.*)\"\})");
@@ -370,6 +419,7 @@ std::string SocketConnection::getContent(const std::string& answer)
     return std::string();
 }
 
+/* Convert the text from markdown to HTML paragraph*/
 std::string SocketConnection::transformMarkdown(std::string& answer)
 {
     std::string html = "<p>";
