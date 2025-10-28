@@ -422,47 +422,10 @@ std::string SocketConnection::getContent(const std::string& answer)
 /* Convert the text from markdown to HTML paragraph*/
 std::string SocketConnection::transformMarkdown(std::string& answer)
 {
-    std::string html = "<p>";
     size_t nmemb = answer.size();
-    bool start = false;
-    bool startq = false;
+    std::string html = "<p>";
     for (int i = 0; i < nmemb; ++i) {
-        if (answer[i] == '\"') {
-            if (startq) {
-                html.append("</q>", 4);
-                startq = false;
-            }
-            else {
-                html.append("<q>", 3);
-                startq = true;
-            }
-        }
-        else if (answer[i] == '\\' && i + 1 < nmemb && answer[i + 1] == '\"') {
-            if (startq) {
-                html.append("</q>", 4);
-                startq = false;
-            }
-            else {
-                html.append("<q>", 3);
-                startq = true;
-            }
-            i += 1;
-        }
-        else if (answer[i] == '\n') {
-            html.append("<br>", 4);
-        }
-        else if (answer[i] == '*' && i + 1 < nmemb && answer[i + 1] == '*') {
-            if (start) {
-                html.append("</strong>", 9);
-                start = false;
-            }
-            else {
-                html.append("<strong>", 8);
-                start = true;
-            }
-            i += 1;
-        }
-        else if (answer[i] == '\\' && i + 1 < nmemb && answer[i + 1] == 'n') {
+        if (answer[i] == '\\' && i + 1 < nmemb && answer[i + 1] == 'n') {
             html.append("<br>", 4);
             i += 1;
         }
@@ -470,7 +433,11 @@ std::string SocketConnection::transformMarkdown(std::string& answer)
             html += answer[i];
         }
     }
-
     html += "</p>";
+    std::regex boldPattern(R"(\*\*(.*?)\*\*)");
+    html = std::regex_replace(html, boldPattern, "<strong>$1</strong>");
+    std::regex quotePattern(R"(\\\"(.*?)\\\")");
+    html = std::regex_replace(html, quotePattern, "<q>$1</q>");
+    
     return html;
 }
